@@ -1,0 +1,88 @@
+# SmartDocQ Deployment Checklist
+
+This checklist lets you deploy without running anything locally.
+
+## 1) Frontend (my-app on Vercel)
+- Project settings → Environment Variables:
+  - REACT_APP_API_URL = https://<your-node-api-domain>
+  - REACT_APP_PY_API_URL = https://<your-flask-domain>
+- Build & Output Settings:
+  - Framework Preset: Create React App
+  - Root Directory: my-app
+- Redeploy.
+
+## 2) Node API (servers/) on your host (Render, Railway, Azure App Service)
+- Start command: `npm start`
+- Install command: `npm install`
+- Environment Variables:
+  - PORT = 5000 (or platform default)
+  - MONGO_URI = mongodb+srv://<user>:<pass>@<cluster>/<db>?retryWrites=true&w=majority
+  - JWT_SECRET = <strong-secret>
+  - FRONTEND_ORIGINS = https://<your-vercel-domain>, *.vercel.app
+  - FRONTEND_URL = https://<your-vercel-domain> (not required for reset links; they now use Origin/FRONTEND_ORIGINS)
+  - SERVICE_TOKEN = <shared-strong-secret>
+  - EMAIL_USER = urmail@gmail.com
+  - EMAIL_PASS = pnaq ukmn obli xdew (Gmail App Password - spaces will be auto-removed by code)
+  - GMAIL_API_CLIENT_ID = <oauth-client-id> (optional; Gmail API over HTTPS)
+  - GMAIL_API_CLIENT_SECRET = <oauth-client-secret> (optional)
+  - GMAIL_API_REFRESH_TOKEN = <oauth-refresh-token> (optional)
+  - GMAIL_API_SENDER = SmartDocQ <no-reply@yourdomain.com> (optional; From header for Gmail API)
+  - RESEND_API_KEY = <your-resend-api-key> (optional; enables HTTPS email send to bypass SMTP blocks)
+  - RESEND_FROM = "SmartDocQ <no-reply@yourdomain.com>" (optional; must be verified in Resend)
+  - EXPOSE_RESET_URL = true (optional; include resetUrl in forgot-password response for debugging)
+  - OPS_KEY = <random-ops-secret> (optional; secures /api/auth/_ops/email-test)
+  - GOOGLE_CLIENT_ID = <your-google-oauth-client-id>
+  - GOOGLE_CLIENT_SECRET = <your-google-oauth-client-secret>
+  - CLOUDINARY_CLOUD_NAME = (optional)
+  - CLOUDINARY_API_KEY = (optional)
+  - CLOUDINARY_API_SECRET = (optional)
+  - CLOUDINARY_AVATAR_FOLDER = smartdoc/avatars (optional)
+  - FLASK_ASK_URL = https://<your-flask-domain>/api/document/ask
+  - FLASK_INDEX_URL = https://<your-flask-domain>/api/index-from-atlas
+  - FLASK_CONVERT_URL = https://<your-flask-domain>/api/convert/word-to-pdf
+- After deploy, check: GET https://<your-node-api-domain>/healthz → { "status": "ok" }.
+
+## 3) Flask service (backend/) on your host
+- Build: `pip install -r requirements.txt`
+- Start command (Gunicorn): `gunicorn main:app --workers 2 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT`
+- Environment Variables:
+  - PORT = 5001 (or platform default)
+  - FRONTEND_ORIGINS = https://<your-vercel-domain>, *.vercel.app
+  - NODE_BASE_URL = https://<your-node-api-domain>
+  - SERVICE_TOKEN = <same-as-Node>
+  - GEMINI_API_KEY = <your-google-generative-ai-key>
+  - TEXT_MODEL = models/gemini-2.5-flash (optional)
+  - EMBED_MODEL = models/text-embedding-004 (optional)
+  - CHROMA_DB_PATH = /var/data/chroma_db (recommended when using a persistent disk)
+- After deploy, check: GET https://<your-flask-domain>/healthz → { "status": "ok" }.
+
+## 4) Order of operations
+1. Deploy Node API; confirm /healthz.
+2. Deploy Flask; confirm /healthz.
+3. Update Vercel envs; redeploy frontend.
+
+## 5) Quick verifications (no local required)
+- Upload a Word document → Node stores; Node calls Flask convert → preview works.
+- Check My Documents list → processingStatus moves from "queued" → "indexing" → "done".
+- Open Chat on a document → ask a question → response from Flask.
+
+## 6) Troubleshooting
+- CORS errors: ensure FRONTEND_ORIGINS includes your exact Vercel URL or wildcard .vercel.app.
+- 401/403 from Flask doc download: SERVICE_TOKEN must match on Node and Flask.
+- Conversion failures: confirm FLASK_CONVERT_URL set and docx2pdf is available; otherwise Word files are stored as-is.
+- Password reset email not received:
+  - Ensure Gmail account has 2FA and you use an App Password for EMAIL_PASS.
+  - Some hosts block SMTP egress. The API responds immediately, but emails may fail silently; check server logs.
+  - Startup now verifies SMTP transporters and logs any verify/connectivity errors.
+  - Temporarily set `EXPOSE_RESET_URL=true` to get `debug.resetUrl` in the forgot-password response.
+  - Use the secured ops endpoint to test SMTP:
+    - GET https://<your-node-api-domain>/api/auth/_ops/email-test?to=you@example.com
+    - Header: `x-ops-key: <OPS_KEY>` (required in production)
+  - Alternatively, set `RESEND_API_KEY` (and a valid `RESEND_FROM`) to send mail over HTTPS, which works on hosts that block SMTP.
+
+### Render-specific (persistent ChromaDB)
+- Add a Persistent Disk to the Flask service (e.g., size 1–5 GB) and mount it at `/var/data`.
+- Set env var `CHROMA_DB_PATH=/var/data/chroma_db`.
+- Redeploy. Your embeddings will persist across restarts.
+
+Keep servers/.env.example and backend/.env.example as references for all variables.
