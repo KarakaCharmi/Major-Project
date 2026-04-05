@@ -35,3 +35,9 @@ coverage/
 .vscode/
 .idea/
 node_modules
+
+.env
+venv/
+node_modules/
+__pycache__/
+*.pyc
