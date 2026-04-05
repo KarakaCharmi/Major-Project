@@ -14,9 +14,11 @@ HF_TOKEN = os.environ.get("HF_API_TOKEN", "")
 # Model IDs
 BART_MODEL = "facebook/bart-large-cnn"
 LLAMA_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+# LLAMA_MODEL = "HuggingFaceH4/zephyr-7b-beta"
+
 QA_MODEL = "deepset/roberta-base-squad2"
 
-
+# print("HF TOKEN:", HF_TOKEN)
 class HFClient:
     """Wrapper around HuggingFace Inference API using official SDK."""
 
