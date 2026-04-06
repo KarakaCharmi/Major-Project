@@ -120,104 +120,92 @@
 
 
 
+from dotenv import load_dotenv
 import os
 import google.generativeai as genai
 
-# Load API key
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+load_dotenv()
 
-genai.configure(api_key=GEMINI_API_KEY)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Use Gemini model
 model = genai.GenerativeModel("models/gemini-2.5-flash")
 
 
 class HFClient:
-    """Now uses Gemini instead of HuggingFace"""
-
     def __init__(self):
         pass
 
-    # ---------------- SUMMARIZE ----------------
-    def summarize(self, text, max_length=200):
-        prompt = f"Summarize the following text concisely:\n\n{text[:3000]}"
-        return self._generate(prompt)
-
     # ---------------- GENERATE TEXT ----------------
     def generate_text(self, prompt, max_length=512):
-        return self._generate(prompt)
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            print("[Gemini] generate_text error:", e)
+            return ""
 
-    # ---------------- QUIZ ----------------
-    def generate_quiz_json(self, prompt, max_length=1024):
-        system = (
-            "Generate quiz questions in STRICT JSON format.\n"
-            "Return ONLY valid JSON.\n"
-            "No explanation.\n"
-            "No markdown.\n"
-        )
-        return self._generate(prompt, system)
-
-    # ---------------- FLASHCARDS ----------------
-    def generate_flashcard_json(self, prompt, max_length=1024):
-        system = (
-            "Generate flashcards in STRICT JSON format.\n"
-            "Return ONLY valid JSON.\n"
-            "No explanation.\n"
-            "No markdown.\n"
-        )
-        return self._generate(prompt, system)
-
-    # ---------------- CODE ----------------
-    def generate_code(self, prompt, max_length=256):
-        system = (
-            "Write clean, working code.\n"
-            "Return ONLY code.\n"
-            "No explanation.\n"
-            "No markdown.\n"
-        )
-        return self._generate(prompt, system)
-
-    # ---------------- QA ----------------
+    # ---------------- ANSWER QUESTION ----------------
     def answer_question(self, question, context, max_length=300):
-        prompt = f"""
-Answer the question based ONLY on the context.
+        try:
+            prompt = f"""
+You are a helpful AI assistant.
+
+Answer ONLY using the provided document context.
+If the answer is not in the context, say: "Not found in document."
 
 Context:
-{context[:3000]}
+{context}
 
 Question:
 {question}
+
+Answer clearly:
 """
-        return self._generate(prompt)
-
-    # ---------------- CORE GENERATION ----------------
-    def _generate(self, prompt, system=None):
-        try:
-            full_prompt = ""
-
-            if system:
-                full_prompt += system + "\n\n"
-
-            full_prompt += prompt
-
-            response = model.generate_content(full_prompt)
-
-            return response.text.strip()
-
+            response = model.generate_content(prompt)
+            return response.text
         except Exception as e:
-            print("[Gemini] generation error:", e)
+            print("[Gemini] QA error:", e)
             return ""
-# import google.generativeai as genai
-# import os
-# from dotenv import load_dotenv
 
-# load_dotenv()
+    # ---------------- QUIZ ----------------
+    def generate_quiz_json(self, prompt, max_length=1024):
+        try:
+            full_prompt = f"""
+Return ONLY valid JSON.
 
-# genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+{prompt}
+"""
+            response = model.generate_content(full_prompt)
+            return response.text
+        except Exception as e:
+            print("[Gemini] quiz error:", e)
+            return ""
 
-# models = genai.list_models()
+    # ---------------- FLASHCARDS ----------------
+    def generate_flashcard_json(self, prompt, max_length=1024):
+        try:
+            full_prompt = f"""
+Return ONLY valid JSON.
 
-# for m in models:
-#     print("MODEL:", m.name)
-#     print("METHODS:", m.supported_generation_methods)
-#     print("-" * 40)
+{prompt}
+"""
+            response = model.generate_content(full_prompt)
+            return response.text
+        except Exception as e:
+            print("[Gemini] flashcard error:", e)
+            return ""
+
+    # ---------------- CODE ----------------
+    def generate_code(self, prompt, max_length=256):
+        try:
+            full_prompt = f"""
+Write clean working code.
+Return ONLY code.
+
+{prompt}
+"""
+            response = model.generate_content(full_prompt)
+            return response.text
+        except Exception as e:
+            print("[Gemini] code error:", e)
+            return ""

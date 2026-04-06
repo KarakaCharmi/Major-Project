@@ -27,26 +27,14 @@ router.get("/", verifyToken, ensureActive, async (req, res) => {
 });
 
 // Get or create chat for a document
-router.get("/:documentId", verifyToken, ensureActive, async (req, res) => {
-  try {
-    const { documentId } = req.params;
-    const doc = await Document.findOne({ _id: documentId, user: req.userId });
-    if (!doc) return res.status(404).json({ message: "Document not found" });
-
-    let chat = await Chat.findOne({ user: req.userId, document: documentId });
-    if (!chat) chat = await Chat.create({ user: req.userId, document: documentId, messages: [] });
-    res.json({ messages: chat.messages, doc_id: doc.doc_id });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// Append a message (user) and ask Flask for assistant reply, then save both
 router.post("/:documentId/message", verifyToken, ensureActive, async (req, res) => {
   try {
     const { documentId } = req.params;
     const { text } = req.body;
-    if (!text || typeof text !== "string") return res.status(400).json({ message: "Invalid text" });
+
+    if (!text || typeof text !== "string") {
+      return res.status(400).json({ message: "Invalid text" });
+    }
 
     const doc = await Document.findOne({ _id: documentId, user: req.userId });
     if (!doc) return res.status(404).json({ message: "Document not found" });
@@ -54,27 +42,54 @@ router.post("/:documentId/message", verifyToken, ensureActive, async (req, res) 
     const now = new Date();
     const userMsg = { role: "user", text, at: now };
 
-    // Call Flask to get assistant answer using doc.doc_id
     let assistantText = "";
-    try {
-      console.info("[chat] calling Flask ask", FLASK_ASK_URL, { doc_id: doc.doc_id });
-      const resp = await fetch(FLASK_ASK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: text, doc_id: doc.doc_id }),
-        timeout: 45000,
-      });
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => "");
-        console.error("[chat] Flask ask returned non-OK", resp.status, txt);
+
+    // ✅ greeting
+    const lower = text.trim().toLowerCase();
+    if (["hi", "hello", "hey"].includes(lower)) {
+      assistantText = "Hello 👋 How can I help you with your document?";
+    } else {
+
+      let attempts = 0;
+
+      while (attempts < 5) {
+        try {
+          const resp = await fetch(FLASK_ASK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question: text, doc_id: doc.doc_id }),
+          });
+
+          const json = await resp.json().catch(() => ({}));
+          const answer = json.answer || "";
+
+          if (answer.includes("processing")) {
+            await new Promise(res => setTimeout(res, 2000));
+            attempts++;
+            continue;
+          }
+
+          assistantText = answer || "⚠️ Query failed";
+          break;
+
+        } catch (e) {
+          console.error("Retry error:", e);
+          assistantText = "⚠️ Error contacting assistant";
+          break;
+        }
       }
-      const json = await resp.json().catch(() => ({}));
-      assistantText = json.answer || json.error || "⚠️ Query failed";
-    } catch (e) {
-      console.error("[chat] Error contacting Flask ask:", e && (e.stack || e.message || e));
-      assistantText = "⚠️ Error contacting assistant";
+
+      if (!assistantText) {
+        assistantText = "⚠️ Document processing took too long.";
+      }
     }
-  const asstMsg = { role: "assistant", text: assistantText, at: new Date(), rating: "none" };
+
+    const asstMsg = {
+      role: "assistant",
+      text: assistantText,
+      at: new Date(),
+      rating: "none"
+    };
 
     const chat = await Chat.findOneAndUpdate(
       { user: req.userId, document: documentId },
@@ -82,12 +97,12 @@ router.post("/:documentId/message", verifyToken, ensureActive, async (req, res) 
       { upsert: true, new: true }
     );
 
-    res.json({ messages: chat.messages, appended: [userMsg, asstMsg] });
+    res.json({ messages: chat.messages });
+
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
-
 // Append provided messages to chat (used for summarize flow where assistant text is already computed)
 router.post("/:documentId/append", verifyToken, ensureActive, async (req, res) => {
   try {

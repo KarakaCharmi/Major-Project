@@ -195,15 +195,22 @@ def detect_sensitive(text: str) -> dict:
     return summary
 
 # ====== HELPERS ======
+import fitz  # PyMuPDF
+
 def extract_text_from_pdf_bytes(data: bytes) -> str:
     text = ""
     try:
-        reader = PyPDF2.PdfReader(io.BytesIO(data))
-        for page in reader.pages:
-            content = page.extract_text() or ""
-            text += content + "\n"
+        doc = fitz.open(stream=data, filetype="pdf")
+
+        for page in doc:
+            page_text = page.get_text()
+            print("PAGE TEXT LENGTH:", len(page_text))
+            text += page_text + "\n"
+
     except Exception as e:
-        print("PDF extraction error:", e)
+        print("❌ PDF extraction error:", e)
+
+    print("TOTAL TEXT LENGTH:", len(text))
     return text
 
 def extract_text_from_docx_bytes(data: bytes) -> str:
@@ -520,7 +527,9 @@ def ask_doc():
     data = request.get_json(silent=True) or {}
     question = data.get("question", "").strip()
     doc_id = data.get("doc_id", "").strip()
-
+    print("🔥 ASK HIT")
+    print("QUESTION:", question)
+    print("DOC_ID:", doc_id)
     if not question:
         return jsonify({"error": "Missing question"}), 400
 
@@ -529,9 +538,8 @@ def ask_doc():
 
         bullet = "\n".join(f"- {t}" for t in topics)
         msg = (
-            "Hello! I'm here to help you with your document. You can ask questions about the following sections/topics in your document:\n"
-            f"{bullet}\n\n"
-            "Please type a question related to one of these topics."
+            "Hello! I'm here to help you with your document."
+            "Please type a question ."
         )
         return jsonify({"answer": msg, "requireConfirmation": False})
     
@@ -611,22 +619,32 @@ def ask_doc():
 
 
         if not has_index(doc_id):
+            print("⏳ Waiting for indexing...")
 
+        if doc_id not in _indexing_in_progress:
             _start_background_indexing(doc_id)
-            return jsonify({
-                "answer": "Indexing this document in the background. Please try your question again in ~30-60 seconds.",
-                "requireConfirmation": False
-            })
 
+        # wait until indexing completes (max 30s)
+        import time
+        waited = 0
+        while not has_index(doc_id) and waited < 30:
+            time.sleep(1)
+            waited += 1
+
+        if not has_index(doc_id):
+            return jsonify({
+                "answer": "⚠️ Document processing failed or took too long."
+            })
+        
 
         q_emb = generate_embeddings(question)
         if not q_emb:
             return jsonify({"error": "Failed to generate embedding"}), 500
 
         # Search FAISS for relevant chunks
-        results = vector_store.search(q_emb, doc_id=doc_id, top_k=5)
+        results = vector_store.search(q_emb, doc_id=doc_id, top_k=7)
 
-        if not results or all(r["score"] < 0.2 for r in results):
+        if not results or all(r["score"] < 0.05 for r in results):
             general_fallback[doc_id] = {
                 "awaiting": True,
                 "pending_question": question,
@@ -760,26 +778,35 @@ _indexing_in_progress = set()
 _indexing_lock = threading.Lock()
 
 def _background_index(doc_id: str):
+    print("🚀 INDEXING STARTED:", doc_id)
+
     try:
         ok, filename, mimetype, data_bytes = fetch_doc_from_node(doc_id)
+        print("FETCH:", ok, filename)
+
         if not ok:
+            print("❌ Fetch failed")
             return
 
-        text_for_scan = extract_text_for_mimetype(filename, mimetype, data_bytes)
-        if not text_for_scan:
+        text = extract_text_for_mimetype(filename, mimetype, data_bytes)
+        print("TEXT LENGTH:", len(text))
+
+        if not text:
+            print("❌ No text extracted")
             return
-        scan = detect_sensitive(text_for_scan)
-        prev = consent_state.get(doc_id) or {}
-        consent_state[doc_id] = {
-            "sensitive": bool(scan.get("found")),
-            "confirmed": bool(prev.get("confirmed", False)),
-            "awaiting": False,
-            "last_scan": "ok",
-            "summary": scan,
-        }
-        if scan.get("found") and not prev.get("confirmed", False):
-            return
-        index_bytes(doc_id, filename, mimetype, data_bytes)
+
+        scan = detect_sensitive(text)
+        print("SENSITIVE:", scan)
+
+        # 🔥 DO NOT BLOCK INDEXING
+        print("⚠️ Sensitive data detected but continuing indexing")
+
+        indexed, count = index_bytes(doc_id, filename, mimetype, data_bytes)
+        print("✅ INDEXED:", indexed, count)
+
+    except Exception as e:
+        print("❌ INDEX ERROR:", e)
+
     finally:
         with _indexing_lock:
             _indexing_in_progress.discard(doc_id)
@@ -935,13 +962,13 @@ def replace_text_index():
             "last_scan": "ok",
             "summary": scan,
         }
-        if scan.get("found") and not prev.get("confirmed", False):
-            return jsonify({
-                "message": "Sensitive data detected; indexing deferred until consent.",
-                "requireConfirmation": True,
-                "sensitiveSummary": scan,
-                "doc_id": doc_id,
-            }), 200
+        # if scan.get("found") and not prev.get("confirmed", False):
+        #     return jsonify({
+        #         "message": "Sensitive data detected; indexing deferred until consent.",
+        #         "requireConfirmation": True,
+        #         "sensitiveSummary": scan,
+        #         "doc_id": doc_id,
+        #     }), 200
 
         indexed, added = index_text(doc_id, filename, text)
         if not indexed:
